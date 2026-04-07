@@ -26,7 +26,7 @@ from datetime import datetime
 from .config import MempalaceConfig
 from .searcher import search_memories
 from .palace_graph import traverse, find_tunnels, graph_stats
-import chromadb
+import chromadb  # type: ignore
 
 from .knowledge_graph import KnowledgeGraph
 
@@ -178,6 +178,39 @@ def tool_search(query: str, limit: int = 5, wing: str = None, room: str = None):
         room=room,
         n_results=limit,
     )
+
+
+def tool_smart_search(query: str, limit: int = 5, wing: str = None, room: str = None):
+    """
+    The automated Palace Efficiency Protocol. 
+    Checks KG -> Autodetects Taxonomy -> Performs targeted search.
+    """
+    results = {"applied_filters": {"wing": wing, "room": room}, "kg_facts": [], "semantic_results": []}
+    
+    # 1. KG Check (Low Token Cost)
+    kg_results = _kg.query_entity(query)
+    if kg_results:
+        results["kg_facts"] = kg_results
+
+    # 2. Taxonomy Heuristic (if no filters provided)
+    if not wing and not room:
+        taxonomy = tool_get_taxonomy().get("taxonomy", {})
+        for w, room_dict in taxonomy.items():
+            if w.lower() in query.lower():
+                wing = w
+                results["applied_filters"]["wing"] = w
+                # Check rooms within the detected wing
+                for r in room_dict.keys():
+                    if r.lower() in query.lower() or r.replace('-', '').lower() in query.lower():
+                        room = r
+                        results["applied_filters"]["room"] = r
+                        break
+                break
+
+    # 3. Targeted Semantic Search
+    search_res = tool_search(query, limit=limit, wing=wing, room=room)
+    results["semantic_results"] = search_res.get("results", [])
+    return results
 
 
 def tool_check_duplicate(content: str, threshold: float = 0.9):
@@ -439,6 +472,20 @@ def tool_diary_read(agent_name: str, last_n: int = 10):
 # ==================== MCP PROTOCOL ====================
 
 TOOLS = {
+    "mempalace_smart_search": {
+        "description": "The most efficient search protocol. Handles KG lookups, taxonomy auto-filtering, and optimized semantic search in one call. Use this as your primary search tool to save tokens.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to search for"},
+                "limit": {"type": "integer", "description": "Max results (default 5)"},
+                "wing": {"type": "string", "description": "Filter by wing (optional)"},
+                "room": {"type": "string", "description": "Filter by room (optional)"},
+            },
+            "required": ["query"],
+        },
+        "handler": tool_smart_search,
+    },
     "mempalace_status": {
         "description": "Palace overview — total drawers, wing and room counts",
         "input_schema": {"type": "object", "properties": {}},
@@ -585,7 +632,7 @@ TOOLS = {
         "handler": tool_graph_stats,
     },
     "mempalace_search": {
-        "description": "Semantic search. Returns verbatim drawer content with similarity scores.",
+        "description": "RAW SEARCH (Warning: High Token Cost). Use mempalace_smart_search instead for auto-filtering and efficiency.",
         "input_schema": {
             "type": "object",
             "properties": {
